@@ -131,6 +131,17 @@ def load_traffic_data(file_pattern=None, limit_files=None):
 
 def load_mobility_data(file_pattern=None, limit_files=None):
     try:
+        engine = get_sqlalchemy_engine()
+
+        existing_count = pd.read_sql(
+            "SELECT COUNT(*) as count FROM fact_mobility_provinces",
+            engine
+        ).iloc[0]['count']
+
+        if existing_count > 0:
+            logger.info(f"✓ {existing_count} mobility rows already loaded (skipping)")
+            return
+
         pattern = file_pattern or MOBILITY_PATTERN
         csv_files = sorted(DATA_DIR.glob(pattern))
         
@@ -143,9 +154,23 @@ def load_mobility_data(file_pattern=None, limit_files=None):
         
         logger.info(f"Loading {len(csv_files)} mobility files...")
         
-        engine = get_sqlalchemy_engine()
         total_rows = 0
         
+        province_map = {
+            "Monza E Della Brianza": "Monza e della Brianza",
+            "Reggio Nell'Emilia": "Reggio nell'Emilia",
+            "Reggio Di Calabria": "Reggio di Calabria",
+            "Pesaro E Urbino": "Pesaro e Urbino",
+            "Massa-Carrara": "Massa Carrara",
+            "Valle D'Aosta": "Aosta",
+            "Bolzano/Bozen": "Bolzano",
+        }
+
+        valid_provinces = pd.read_sql(
+            "SELECT provincia FROM dim_provinces_it",
+            engine
+        )['provincia']
+
         for csv_file in csv_files:
             logger.info(f"  - {csv_file.name}")
             df = pd.read_csv(csv_file)
@@ -156,9 +181,18 @@ def load_mobility_data(file_pattern=None, limit_files=None):
             df = df.rename(columns={
                 'CellID': 'cell_id',
                 'provinceName': 'provincia',
-                'cell2Province': 'cell_to_province',
-                'Province2cell': 'province_to_cell'
+                'cell2Province': 'cell2province',
+                'Province2cell': 'province2cell'
             })
+
+            if 'provincia' in df.columns:
+                df['provincia'] = df['provincia'].str.title().str.strip()
+                df['provincia'] = df['provincia'].replace(province_map)
+                before = len(df)
+                df = df[df['provincia'].isin(valid_provinces)]
+                dropped = before - len(df)
+                if dropped:
+                    logger.info(f"    - dropped {dropped} rows with unmatched provinces from {csv_file.name}")
             
             df = df[df['cell_id'].between(0, 9999)]
             
