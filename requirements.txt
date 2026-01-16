@@ -3,4 +3,5 @@ geopandas==0.14.4
 fiona>=1.9.5
 pandas==2.1.4
 sqlalchemy==2.0.23
+geoalchemy2==0.14.7
 python-dotenv==1.0.0
