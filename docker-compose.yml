@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: milan_etl_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-milan_telecom}
+      POSTGRES_USER: ${DB_USER:-bl4z}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bl4z}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - etl_network
+
+  etl:
+    build: .
+    container_name: milan_etl_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_NAME: ${DB_NAME:-milan_telecom}
+      DB_USER: ${DB_USER:-bl4z}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DATA_DIR: /app/data_milan_cdr_kaggle
+    volumes:
+      - ./data_milan_cdr_kaggle:/app/data_milan_cdr_kaggle:ro
+    networks:
+      - etl_network
+
+networks:
+  etl_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
