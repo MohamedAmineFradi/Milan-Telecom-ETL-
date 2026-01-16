@@ -44,7 +44,7 @@ wheels/
 # Base de données locale (si sauvegarde)
 *.db
 *.sqlite
-data*/
+data_milan_cdr_kaggle/
 
 # OS
 .DS_Store
