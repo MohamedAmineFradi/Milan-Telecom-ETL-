@@ -45,7 +45,7 @@ wheels/
 *.db
 *.sqlite
 data_milan_cdr_kaggle/
-
+/volumes/
 # OS
 .DS_Store
 Thumbs.db

@@ -55,83 +55,69 @@ def create_database():
         raise
 
 
-def create_schema():
-    schema_sql = """
+def create_schema(drop_existing: bool = False):
+    drop_sql = "" if not drop_existing else """
+    DROP TABLE IF EXISTS fact_mobility_provinces CASCADE;
+    DROP TABLE IF EXISTS fact_traffic_milan CASCADE;
+    DROP TABLE IF EXISTS dim_provinces_it CASCADE;
+    DROP TABLE IF EXISTS dim_grid_milan CASCADE;
+    """
+
+    schema_sql = f"""
+    {drop_sql}
     CREATE TABLE IF NOT EXISTS dim_grid_milan (
-        cell_id INTEGER PRIMARY KEY,
-        geometry GEOMETRY(POLYGON, 32632),
+        cell_id INTEGER PRIMARY KEY CHECK (cell_id BETWEEN 0 AND 9999),
+        geometry GEOMETRY(POLYGON, 32632) NOT NULL,
         bounds TEXT,
         created_at TIMESTAMP DEFAULT NOW()
     );
 
     CREATE TABLE IF NOT EXISTS dim_provinces_it (
         provincia VARCHAR(50) PRIMARY KEY,
-        geometry GEOMETRY(MULTIPOLYGON, 32632),
-        population INTEGER DEFAULT 0
+        geometry GEOMETRY(MULTIPOLYGON, 32632) NOT NULL,
+        population INTEGER DEFAULT 0 CHECK (population >= 0)
     );
 
     CREATE TABLE IF NOT EXISTS fact_traffic_milan (
-        datetime TIMESTAMPTZ,
-        cell_id INTEGER REFERENCES dim_grid_milan(cell_id),
-        countrycode INTEGER,
-        smsin NUMERIC DEFAULT 0 NOT NULL, 
-        smsout NUMERIC DEFAULT 0 NOT NULL,
-        callin NUMERIC DEFAULT 0 NOT NULL, 
-        callout NUMERIC DEFAULT 0 NOT NULL,
-        internet NUMERIC DEFAULT 0 NOT NULL,
+        datetime TIMESTAMPTZ NOT NULL,
+        cell_id INTEGER NOT NULL REFERENCES dim_grid_milan(cell_id),
+        countrycode INTEGER NOT NULL,
+        smsin NUMERIC DEFAULT 0 NOT NULL CHECK (smsin >= 0), 
+        smsout NUMERIC DEFAULT 0 NOT NULL CHECK (smsout >= 0),
+        callin NUMERIC DEFAULT 0 NOT NULL CHECK (callin >= 0), 
+        callout NUMERIC DEFAULT 0 NOT NULL CHECK (callout >= 0),
+        internet NUMERIC DEFAULT 0 NOT NULL CHECK (internet >= 0),
         PRIMARY KEY (datetime, cell_id, countrycode)
     );
 
     CREATE TABLE IF NOT EXISTS fact_mobility_provinces (
-        datetime TIMESTAMPTZ,
-        cell_id INTEGER REFERENCES dim_grid_milan(cell_id),
-        provincia VARCHAR(50) REFERENCES dim_provinces_it(provincia),
-        cell2province NUMERIC DEFAULT 0 NOT NULL,
-        province2cell NUMERIC DEFAULT 0 NOT NULL
+        datetime TIMESTAMPTZ NOT NULL,
+        cell_id INTEGER NOT NULL REFERENCES dim_grid_milan(cell_id),
+        provincia VARCHAR(50) NOT NULL REFERENCES dim_provinces_it(provincia),
+        cell2province NUMERIC DEFAULT 0 NOT NULL CHECK (cell2province >= 0),
+        province2cell NUMERIC DEFAULT 0 NOT NULL CHECK (province2cell >= 0)
     );
 
-    -- Enforce defaults and clean up existing nulls
-    ALTER TABLE dim_provinces_it
-        ALTER COLUMN population SET DEFAULT 0;
-    UPDATE dim_provinces_it SET population = 0 WHERE population IS NULL;
-
-    UPDATE dim_grid_milan
-    SET bounds = COALESCE(bounds, ST_AsText(ST_Envelope(geometry)))
-    WHERE bounds IS NULL;
-
-    ALTER TABLE fact_traffic_milan
-        ALTER COLUMN smsin SET DEFAULT 0,
-        ALTER COLUMN smsout SET DEFAULT 0,
-        ALTER COLUMN callin SET DEFAULT 0,
-        ALTER COLUMN callout SET DEFAULT 0,
-        ALTER COLUMN internet SET DEFAULT 0;
-    UPDATE fact_traffic_milan
-    SET
-        smsin = COALESCE(smsin, 0),
-        smsout = COALESCE(smsout, 0),
-        callin = COALESCE(callin, 0),
-        callout = COALESCE(callout, 0),
-        internet = COALESCE(internet, 0);
-    DELETE FROM fact_traffic_milan WHERE datetime IS NULL;
-
-    ALTER TABLE fact_mobility_provinces
-        ALTER COLUMN cell2province SET DEFAULT 0,
-        ALTER COLUMN province2cell SET DEFAULT 0;
-    UPDATE fact_mobility_provinces
-    SET
-        cell2province = COALESCE(cell2province, 0),
-        province2cell = COALESCE(province2cell, 0);
-    DELETE FROM fact_mobility_provinces WHERE datetime IS NULL;
-
     CREATE OR REPLACE VIEW v_hourly_traffic AS
-    SELECT DATE_TRUNC('hour', datetime) AS hour,
-           cell_id,
-           SUM(smsin+smsout+callin+callout+internet) AS total_activity
+    SELECT 
+        DATE_TRUNC('hour', datetime) AS hour,
+        cell_id,
+        SUM(smsin) AS total_smsin,
+        SUM(smsout) AS total_smsout,
+        SUM(callin) AS total_callin,
+        SUM(callout) AS total_callout,
+        SUM(internet) AS total_internet,
+        SUM(smsin + smsout + callin + callout + internet) AS total_activity
     FROM fact_traffic_milan 
     GROUP BY 1, 2;
 
     CREATE INDEX IF NOT EXISTS idx_grid_geom ON dim_grid_milan USING GIST(geometry);
     CREATE INDEX IF NOT EXISTS idx_traffic_time ON fact_traffic_milan(datetime);
+    CREATE INDEX IF NOT EXISTS idx_traffic_cell ON fact_traffic_milan(cell_id);
+    CREATE INDEX IF NOT EXISTS idx_traffic_composite ON fact_traffic_milan(cell_id, datetime);
+    CREATE INDEX IF NOT EXISTS idx_mobility_provincia ON fact_mobility_provinces(provincia);
+    CREATE INDEX IF NOT EXISTS idx_mobility_cell ON fact_mobility_provinces(cell_id);
+    CREATE INDEX IF NOT EXISTS idx_mobility_datetime ON fact_mobility_provinces(datetime);
     """
     
     try:

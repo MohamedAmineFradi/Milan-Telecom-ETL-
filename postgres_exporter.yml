@@ -1,0 +1,4 @@
+# Minimal config for postgres-exporter; connection is provided via DATA_SOURCE_NAME env
+# This file exists to satisfy --config.file and can be extended with custom queries.
+global:
+  disable_default_metrics: false

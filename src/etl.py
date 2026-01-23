@@ -121,14 +121,22 @@ def load_traffic_data(file_pattern=None, limit_files=None):
         logger.info(f"Loading {len(csv_files)} traffic files...")
         
         total_rows = 0
+        rejected_rows = []
         
         for csv_file in csv_files:
             logger.info(f"  - {csv_file.name}")
             df = pd.read_csv(csv_file)
+            initial_count = len(df)
+            invalid_dates = 0
+            invalid_cells = 0
             
             if 'datetime' in df.columns:
                 df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                before = len(df)
                 df = df.dropna(subset=['datetime'])
+                invalid_dates = before - len(df)
+                if invalid_dates:
+                    logger.warning(f"    - {invalid_dates} invalid dates will be dropped")
             
             df = df.rename(columns={'CellID': 'cell_id'})
 
@@ -136,20 +144,43 @@ def load_traffic_data(file_pattern=None, limit_files=None):
             for col in metric_cols:
                 if col not in df.columns:
                     df[col] = 0
+                else:
+                    neg_count = (df[col] < 0).sum()
+                    if neg_count > 0:
+                        logger.warning(f"    - {neg_count} negative values in {col}, setting to 0")
             df[metric_cols] = df[metric_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-            
+            for col in metric_cols:
+                df.loc[df[col] < 0, col] = 0
+
+            invalid_cells = df[~df['cell_id'].between(0, 9999)].shape[0]
             df = df[df['cell_id'].between(0, 9999)]
+
+            final_count = len(df)
+            rejected = initial_count - final_count
+            if rejected:
+                logger.info(f"    - Cleaned: {rejected} rows rejected ({final_count} kept)")
+                rejected_rows.append({
+                    'file': csv_file.name,
+                    'initial': initial_count,
+                    'final': final_count,
+                    'rejected': rejected,
+                    'invalid_dates': invalid_dates,
+                    'invalid_cells': invalid_cells
+                })
             
             df.to_sql(
                 'fact_traffic_milan',
                 engine,
                 if_exists='append',
                 index=False,
-                chunksize=100
+                chunksize=1000
             )
             total_rows += len(df)
         
         logger.info(f"✓ {total_rows} traffic rows loaded from {len(csv_files)} files")
+        if rejected_rows:
+            total_rejected = sum(r['rejected'] for r in rejected_rows)
+            logger.info(f"⚠ {total_rejected} total rows were rejected during cleaning")
         
     except Exception as e:
         logger.error(f"Traffic data loading error: {e}")
@@ -204,7 +235,11 @@ def load_mobility_data(file_pattern=None, limit_files=None):
             
             if 'datetime' in df.columns:
                 df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                before = len(df)
                 df = df.dropna(subset=['datetime'])
+                dropped_null = before - len(df)
+                if dropped_null:
+                    logger.info(f"    - dropped {dropped_null} rows with null/invalid datetime from {csv_file.name}")
             
             df = df.rename(columns={
                 'CellID': 'cell_id',
@@ -262,3 +297,32 @@ def get_top_cells(limit=10):
     except Exception as e:
         logger.error(f"Query error: {e}")
         raise
+
+
+def validate_schema_constraints(engine=None):
+    """Check simple non-negative constraints at the DB level."""
+    engine = engine or get_sqlalchemy_engine()
+    constraints = [
+        ("dim_grid_milan", "(cell_id BETWEEN 0 AND 9999)"),
+        ("dim_provinces_it", "(population >= 0)"),
+        ("fact_traffic_milan", "(smsin >= 0)"),
+        ("fact_traffic_milan", "(smsout >= 0)"),
+        ("fact_traffic_milan", "(callin >= 0)"),
+        ("fact_traffic_milan", "(callout >= 0)"),
+        ("fact_traffic_milan", "(internet >= 0)"),
+        ("fact_mobility_provinces", "(cell2province >= 0)"),
+        ("fact_mobility_provinces", "(province2cell >= 0)")
+    ]
+
+    for table, condition in constraints:
+        query = f"""
+        SELECT COUNT(*) AS violations
+        FROM {table}
+        WHERE NOT {condition}
+        """
+        df = pd.read_sql(query, engine)
+        violations = int(df.iloc[0]['violations'])
+        if violations > 0:
+            logger.warning(f"⚠ {violations} violations in {table} for constraint {condition}")
+        else:
+            logger.info(f"✓ {table}: {condition} - No violations")

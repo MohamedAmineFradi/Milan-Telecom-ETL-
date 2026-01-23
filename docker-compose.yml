@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   postgres:
@@ -43,11 +42,15 @@ services:
     container_name: milan_postgres_exporter
     environment:
       DATA_SOURCE_NAME: "postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-milan_telecom}?sslmode=disable"
+    command:
+      - "--config.file=/etc/postgres_exporter.yml"
     ports:
       - "9187:9187"
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./postgres_exporter.yml:/etc/postgres_exporter.yml:ro
     networks:
       - etl_network
 
