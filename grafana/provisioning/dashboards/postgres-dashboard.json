@@ -140,7 +140,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "(pg_stat_activity_count / pg_settings_max_connections) * 100",
+          "expr": "(sum(pg_stat_activity_count{datname=\"milan_telecom\"}) / on() pg_settings_max_connections) * 100",
           "refId": "A"
         }
       ],
