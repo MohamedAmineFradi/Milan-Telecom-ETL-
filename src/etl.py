@@ -16,7 +16,17 @@ def load_grid_geometries():
         existing_count = pd.read_sql("SELECT COUNT(*) FROM dim_grid_milan", engine).iloc[0, 0]
         
         if existing_count > 0:
-            logger.info(f"✓ {existing_count} grid cells already loaded (skipping)")
+            logger.info(f"✓ {existing_count} grid cells already loaded (skipping new load)")
+            # Backfill bounds if they are missing
+            from sqlalchemy import text
+            with engine.begin() as conn:
+                conn.execute(text(
+                    """
+                    UPDATE dim_grid_milan
+                    SET bounds = COALESCE(bounds, ST_AsText(ST_Envelope(geometry)))
+                    WHERE bounds IS NULL
+                    """
+                ))
             return
         
         gdf = gpd.read_file(MILANO_GRID_FILE)
@@ -25,8 +35,13 @@ def load_grid_geometries():
             gdf = gdf.to_crs(TARGET_CRS)
         
         gdf['cell_id'] = gdf.index
+
+        bounds_df = gdf.geometry.bounds
+        gdf['bounds'] = bounds_df.apply(
+            lambda row: f"{row.minx},{row.miny},{row.maxx},{row.maxy}", axis=1
+        )
         
-        gdf[['cell_id', 'geometry']].to_postgis(
+        gdf[['cell_id', 'geometry', 'bounds']].to_postgis(
             'dim_grid_milan',
             engine,
             if_exists='append',
@@ -60,8 +75,13 @@ def load_provinces_geometries():
             gdf = gdf.rename(columns={'PROVINCIA': 'provincia'})
         elif 'name' in gdf.columns:
             gdf = gdf.rename(columns={'name': 'provincia'})
+
+        if 'population' in gdf.columns:
+            gdf['population'] = pd.to_numeric(gdf['population'], errors='coerce').fillna(0).astype(int)
+        else:
+            gdf['population'] = 0
         
-        gdf[['provincia', 'geometry']].to_postgis(
+        gdf[['provincia', 'geometry', 'population']].to_postgis(
             'dim_provinces_it',
             engine,
             if_exists='append',
@@ -107,9 +127,16 @@ def load_traffic_data(file_pattern=None, limit_files=None):
             df = pd.read_csv(csv_file)
             
             if 'datetime' in df.columns:
-                df['datetime'] = pd.to_datetime(df['datetime'])
+                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                df = df.dropna(subset=['datetime'])
             
             df = df.rename(columns={'CellID': 'cell_id'})
+
+            metric_cols = ['smsin', 'smsout', 'callin', 'callout', 'internet']
+            for col in metric_cols:
+                if col not in df.columns:
+                    df[col] = 0
+            df[metric_cols] = df[metric_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
             
             df = df[df['cell_id'].between(0, 9999)]
             
@@ -176,7 +203,8 @@ def load_mobility_data(file_pattern=None, limit_files=None):
             df = pd.read_csv(csv_file)
             
             if 'datetime' in df.columns:
-                df['datetime'] = pd.to_datetime(df['datetime'])
+                df['datetime'] = pd.to_datetime(df['datetime'], errors='coerce')
+                df = df.dropna(subset=['datetime'])
             
             df = df.rename(columns={
                 'CellID': 'cell_id',
@@ -184,6 +212,11 @@ def load_mobility_data(file_pattern=None, limit_files=None):
                 'cell2Province': 'cell2province',
                 'Province2cell': 'province2cell'
             })
+
+            for col in ['cell2province', 'province2cell']:
+                if col not in df.columns:
+                    df[col] = 0
+            df[['cell2province', 'province2cell']] = df[['cell2province', 'province2cell']].apply(pd.to_numeric, errors='coerce').fillna(0)
 
             if 'provincia' in df.columns:
                 df['provincia'] = df['provincia'].str.title().str.strip()

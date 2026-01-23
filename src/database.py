@@ -67,18 +67,18 @@ def create_schema():
     CREATE TABLE IF NOT EXISTS dim_provinces_it (
         provincia VARCHAR(50) PRIMARY KEY,
         geometry GEOMETRY(MULTIPOLYGON, 32632),
-        population INTEGER
+        population INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS fact_traffic_milan (
         datetime TIMESTAMPTZ,
         cell_id INTEGER REFERENCES dim_grid_milan(cell_id),
         countrycode INTEGER,
-        smsin NUMERIC, 
-        smsout NUMERIC,
-        callin NUMERIC, 
-        callout NUMERIC,
-        internet NUMERIC,
+        smsin NUMERIC DEFAULT 0 NOT NULL, 
+        smsout NUMERIC DEFAULT 0 NOT NULL,
+        callin NUMERIC DEFAULT 0 NOT NULL, 
+        callout NUMERIC DEFAULT 0 NOT NULL,
+        internet NUMERIC DEFAULT 0 NOT NULL,
         PRIMARY KEY (datetime, cell_id, countrycode)
     );
 
@@ -86,9 +86,42 @@ def create_schema():
         datetime TIMESTAMPTZ,
         cell_id INTEGER REFERENCES dim_grid_milan(cell_id),
         provincia VARCHAR(50) REFERENCES dim_provinces_it(provincia),
-        cell2province NUMERIC,
-        province2cell NUMERIC
+        cell2province NUMERIC DEFAULT 0 NOT NULL,
+        province2cell NUMERIC DEFAULT 0 NOT NULL
     );
+
+    -- Enforce defaults and clean up existing nulls
+    ALTER TABLE dim_provinces_it
+        ALTER COLUMN population SET DEFAULT 0;
+    UPDATE dim_provinces_it SET population = 0 WHERE population IS NULL;
+
+    UPDATE dim_grid_milan
+    SET bounds = COALESCE(bounds, ST_AsText(ST_Envelope(geometry)))
+    WHERE bounds IS NULL;
+
+    ALTER TABLE fact_traffic_milan
+        ALTER COLUMN smsin SET DEFAULT 0,
+        ALTER COLUMN smsout SET DEFAULT 0,
+        ALTER COLUMN callin SET DEFAULT 0,
+        ALTER COLUMN callout SET DEFAULT 0,
+        ALTER COLUMN internet SET DEFAULT 0;
+    UPDATE fact_traffic_milan
+    SET
+        smsin = COALESCE(smsin, 0),
+        smsout = COALESCE(smsout, 0),
+        callin = COALESCE(callin, 0),
+        callout = COALESCE(callout, 0),
+        internet = COALESCE(internet, 0);
+    DELETE FROM fact_traffic_milan WHERE datetime IS NULL;
+
+    ALTER TABLE fact_mobility_provinces
+        ALTER COLUMN cell2province SET DEFAULT 0,
+        ALTER COLUMN province2cell SET DEFAULT 0;
+    UPDATE fact_mobility_provinces
+    SET
+        cell2province = COALESCE(cell2province, 0),
+        province2cell = COALESCE(province2cell, 0);
+    DELETE FROM fact_mobility_provinces WHERE datetime IS NULL;
 
     CREATE OR REPLACE VIEW v_hourly_traffic AS
     SELECT DATE_TRUNC('hour', datetime) AS hour,
