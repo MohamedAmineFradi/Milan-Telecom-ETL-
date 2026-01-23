@@ -24,8 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py .
 COPY src/ ./src/
 
-# Copy data
-COPY data_milan_cdr_kaggle/ ./data_milan_cdr_kaggle/
+# Data will be mounted at runtime via docker-compose volumes
 
 # Default command
 CMD ["python", "main.py"]
